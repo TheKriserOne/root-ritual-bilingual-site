@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, PointerEvent, useEffect, useRef, useState } from "react";
+import {
+  FormEvent,
+  PointerEvent,
+  useEffect,
+  useSyncExternalStore,
+  useRef,
+  useState,
+} from "react";
 
 type Language = "ru" | "en";
 type Localized = { ru: string; en: string };
@@ -142,7 +149,7 @@ const copy = {
       title: "Начнём с",
       titleEm: "разговора.",
       text: "Выберите дату и время, оставьте контакты — я подтвержу запись и задам несколько вопросов перед встречей.",
-      location: "Москва · очно",
+      location: "Лос Анджелес · очно",
       schedule: "Пн–Сб · 10:00–20:00",
       date: "Дата",
       time: "Время",
@@ -286,7 +293,7 @@ const copy = {
       title: "Let’s start with a",
       titleEm: "conversation.",
       text: "Choose a date and time, leave your details — I will confirm the visit and ask a few questions beforehand.",
-      location: "Moscow · in person",
+      location: "Los Angeles · in person",
       schedule: "Mon–Sat · 10:00–20:00",
       date: "Date",
       time: "Time",
@@ -885,6 +892,7 @@ function isDateOpen(iso: string, now = new Date()) {
 }
 
 function ServiceRow({
+  id,
   service,
   language,
   isOpen,
@@ -900,11 +908,12 @@ function ServiceRow({
   detailsLabel: string;
   includesLabel: string;
   suitableLabel: string;
+  id?: string;
 }) {
   const detailsId = "service-details-" + service.number;
 
   return (
-    <article className={isOpen ? "service-card is-open" : "service-card"}>
+    <article id={id} className={isOpen ? "service-card is-open" : "service-card"}>
       <div className="service-topline">
         <span>{service.number}</span>
         <span>{service.price[language]}</span>
@@ -974,6 +983,53 @@ function ServiceRow({
   );
 }
 
+function ServiceSubItem({
+  service,
+  language,
+  includesLabel,
+  suitableLabel,
+}: {
+  service: Service;
+  language: Language;
+  includesLabel: string;
+  suitableLabel: string;
+}) {
+  const priceText = service.rates
+    ? service.rates.map((r) => r.amount + " " + r.label[language]).join(" · ")
+    : service.price[language];
+  const includesText = service.includes
+    .map((item) => {
+      const parts = [item.text[language]];
+      if (item.children) {
+        parts.push(item.children.map((child) => child[language]).join(" / "));
+      }
+      return parts.join(" · ");
+    })
+    .join(" · ");
+
+  return (
+    <li className="service-subitem">
+      <div className="service-subitem-head">
+        <h4>{service.title[language]}</h4>
+        <span className="service-subitem-price">{priceText}</span>
+      </div>
+      {includesText && (
+        <p className="service-subitem-includes">
+          <span>{includesLabel}</span>
+          {includesText}
+        </p>
+      )}
+      {service.suitable && (
+        <p className="service-subitem-suitable">
+          <span>{suitableLabel}</span>
+          {service.suitable[language]}
+        </p>
+      )}
+      {service.note && <p className="service-subitem-note">{service.note[language]}</p>}
+    </li>
+  );
+}
+
 function upcomingOpenDays(count = 18, now = new Date()) {
   const days: string[] = [];
   const cursor = startOfDay(now);
@@ -983,6 +1039,20 @@ function upcomingOpenDays(count = 18, now = new Date()) {
     cursor.setDate(cursor.getDate() + 1);
   }
   return days;
+}
+
+// The booking "open days" list depends on the viewer's local time (timezone +
+// today), which differs between the server and the browser. Render an empty list
+// on the server and populate it on the client so hydration never mismatches.
+let openDaysCache: string[] | null = null;
+
+function getOpenDays(): string[] {
+  if (openDaysCache === null) openDaysCache = upcomingOpenDays();
+  return openDaysCache;
+}
+
+function subscribeToOpenDays(): () => void {
+  return () => {};
 }
 
 function formatOpenDay(iso: string, language: Language) {
@@ -1000,7 +1070,7 @@ export default function Home() {
   const [language, setLanguage] = useState<Language>("ru");
   const [menuOpen, setMenuOpen] = useState(false);
   const [openService, setOpenService] = useState<string | null>(null);
-  const [extrasOpen, setExtrasOpen] = useState(false);
+  const [extrasOpen, setExtrasOpen] = useState(true);
   const [submitted, setSubmitted] = useState(false);
   const [selectedDate, setSelectedDate] = useState("");
   const [aboutPhotoIndex, setAboutPhotoIndex] = useState(0);
@@ -1055,7 +1125,11 @@ export default function Home() {
     showCertificate(certificateIndex + (delta < 0 ? 1 : -1));
   };
 
-  const openDays = upcomingOpenDays();
+  const openDays = useSyncExternalStore(
+    subscribeToOpenDays,
+    getOpenDays,
+    () => [],
+  );
   const timeSlots = selectedDate ? availableSlots(selectedDate) : TIME_SLOTS;
 
   useEffect(() => {
@@ -1131,9 +1205,11 @@ export default function Home() {
       <section className="hero section-pad" id="top">
         <div className="hero-copy">
           <p className="eyebrow">
-            <span className="eyebrow-dot" aria-hidden="true" />
-            <span className="eyebrow-text">
+            <span className="eyebrow-line">
+              <span className="eyebrow-dot" aria-hidden="true" />
               {t.hero.eyebrowRole}
+            </span>
+            <span className="eyebrow-line">
               <span className="eyebrow-dot" aria-hidden="true" />
               {t.hero.eyebrow}
             </span>
@@ -1176,13 +1252,18 @@ export default function Home() {
               <small>{t.hero.noteTopSmall}</small>
             </span>
           </div>
-          <div className="floating-note floating-note-bottom">
+          <a
+            className="floating-note floating-note-bottom"
+            href={"#service-" + services[0].number}
+            onClick={() => setOpenService(services[0].number)}
+            aria-label={services[0].title[language]}
+          >
             <span className="note-number">01</span>
             <span>
               <small>{t.hero.noteBottomSmall}</small>
               <b>{t.hero.noteBottom}</b>
             </span>
-          </div>
+          </a>
         </div>
       </section>
 
@@ -1365,6 +1446,7 @@ export default function Home() {
               key={service.number}
               service={service}
               language={language}
+              id={"service-" + service.number}
               isOpen={openService === service.number}
               onToggle={() =>
                 setOpenService((current) =>
@@ -1400,22 +1482,17 @@ export default function Home() {
               </div>
             </div>
             <div className="service-extra-list" id="extra-services" hidden={!extrasOpen}>
-              {extraServices.map((service) => (
-                <ServiceRow
-                  key={service.number}
-                  service={service}
-                  language={language}
-                  isOpen={openService === service.number}
-                  onToggle={() =>
-                    setOpenService((current) =>
-                      current === service.number ? null : service.number,
-                    )
-                  }
-                  detailsLabel={t.services.details}
-                  includesLabel={t.services.includes}
-                  suitableLabel={t.services.suitable}
-                />
-              ))}
+              <ul className="service-subitems">
+                {extraServices.map((service) => (
+                  <ServiceSubItem
+                    key={service.number}
+                    service={service}
+                    language={language}
+                    includesLabel={t.services.includes}
+                    suitableLabel={t.services.suitable}
+                  />
+                ))}
+              </ul>
             </div>
           </article>
         </div>
@@ -1440,7 +1517,7 @@ export default function Home() {
         <p className="instagram-copy">{t.instagram.text}</p>
         <a
           className="button button-outline"
-          href="https://www.instagram.com/"
+          href="https://www.instagram.com/olga_zhgirova"
           target="_blank"
           rel="noreferrer"
         >
@@ -1635,7 +1712,7 @@ export default function Home() {
         <p>{t.footer.label}</p>
         <a
           className="footer-instagram"
-          href="https://www.instagram.com/"
+          href="https://www.instagram.com/olga_zhgirova"
           target="_blank"
           rel="noreferrer"
         >
